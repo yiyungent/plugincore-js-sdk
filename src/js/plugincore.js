@@ -11,14 +11,16 @@ let _options = {};
  * @param {Element} ele 最好从 body element 开始搜索
  * @param {Function} callback 注释节点 回调函数
  */
-function eachComment(ele, callback) {
+function eachComment(ele, callback, isSync) {
   for (var i = 0; i < ele.childNodes.length; i++) {
     var child = ele.childNodes[i];
     if (child.nodeType == 8) {
       // console.log(child.nodeValue);
-      callback(child);
+      
+      callback(child, isSync);
+
     } else if (child.childNodes) {
-      eachComment(child, callback);
+      eachComment(child, callback, isSync);
     }
   }
 }
@@ -47,7 +49,36 @@ function eachScript(ele, callback) {
   }
 }
 
-function processComment(node) {
+function processHtml(node, res){
+  // 用 widget html 替换注释节点
+  let widgetHtml = utils.parseDOM(res);
+
+  if (_options.debug) {
+    console.log("widgetHtml", widgetHtml);
+  }
+
+  let scriptStr = "";
+  // 对 widgetHtml 搜索 script
+  widgetHtml.forEach(
+    tempNode => { 
+      eachScript(tempNode, scriptNode => {
+        // 末尾加个 ; 防止有不规范的代码 影响之后的执行
+        scriptStr += scriptNode.text + ";";
+      });          
+    }
+  );
+
+  if (_options.debug) {
+    console.log("scriptStr", scriptStr);
+  }
+
+  // 1. 替换 html
+  node.replaceWith(...widgetHtml);
+  // 2. 解析 执行 js
+  eval(scriptStr);
+}
+
+async function processComment(node, isSync) {
   const pluginWidgetFlag = "PluginCore.IPlugins.IWidgetPlugin.Widget";
   // <!-- PluginCore.IPlugins.IWidgetPlugin.Widget(PluginCore.Admin.Footer,a,b,c) -->
   if (node.nodeValue.indexOf(pluginWidgetFlag) != -1) {
@@ -63,51 +94,49 @@ function processComment(node) {
     let widgetKey = temp2.substring(0, temp2.indexOf(","));
     // a,b,c
     let extraPars = temp2.substring(temp2.indexOf(",") + 1);
-    // 发送请求, 获取 html
-    requestHtml(_options.baseUrl + "/api/plugincore/PluginWidget/Widget", {
-      widgetKey: widgetKey,
-      extraPars: extraPars,
-    }).then((res) => {
-      // 用 widget html 替换注释节点
-      let widgetHtml = utils.parseDOM(res);
 
-      if (_options.debug) {
-        console.log("widgetHtml", widgetHtml);
-      }
-
-      let scriptStr = "";
-      // 对 widgetHtml 搜索 script
-      widgetHtml.forEach(
-        tempNode => { 
-          eachScript(tempNode, scriptNode => {
-            // 末尾加个 ; 防止有不规范的代码 影响之后的执行
-            scriptStr += scriptNode.text + ";";
-          });          
-        }
-      );
-
-      if (_options.debug) {
-        console.log("scriptStr", scriptStr);
-      }
-
-      // 1. 替换 html
-      node.replaceWith(...widgetHtml);
-      // 2. 解析 执行 js
-      eval(scriptStr);
-
-    });
-
+    if (isSync) {
+      // 同步, 阻塞
+      let res = await requestHtml(_options.baseUrl + "/api/plugincore/PluginWidget/Widget", {
+        widgetKey: widgetKey,
+        extraPars: extraPars,
+      });
+      processHtml(node, res);
+    } else {
+      // 异步, 非阻塞
+      // 发送请求, 获取 html
+      requestHtml(_options.baseUrl + "/api/plugincore/PluginWidget/Widget", {
+        widgetKey: widgetKey,
+        extraPars: extraPars,
+      }).then((res) => {
+        processHtml(node, res);
+      });
+    }
     
   }
 }
 
 
+/**
+ * 异步,非阻塞
+ */
 function start() {
   console.log("plugincore-js-sdk: start");
   // let rootElement = document.getElementsByTagName("body")[0];
   // 直接从 document 开始搜索, 这样 可以在 <head></head> 中插入扩展点
   let rootElement = document;
-  eachComment(rootElement, processComment);
+  eachComment(rootElement, processComment, false);
+}
+
+/**
+ * 同步, 阻塞
+ */
+function startSync() {
+  console.log("plugincore-js-sdk: startSync");
+  // let rootElement = document.getElementsByTagName("body")[0];
+  // 直接从 document 开始搜索, 这样 可以在 <head></head> 中插入扩展点
+  let rootElement = document;
+  eachComment(rootElement, processComment, true);
 }
 
 function PluginCore(options) {
@@ -123,6 +152,8 @@ PluginCore.prototype = {
   // 以下只会出现在 __proto__ 中
 
   start: start,
+
+  startSync: startSync
 };
 
 String.prototype.format = function () {
